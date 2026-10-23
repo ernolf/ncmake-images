@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+
+# https://docs.github.com/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+updates:
+  # The installer stage of php/Containerfile, pinned by tag and digest. The base
+  # images stay tags on purpose: each image run resolves them to a digest that
+  # is part of the inputs fingerprint, so an upstream rebuild reaches the
+  # published images without a pull request.
+  - package-ecosystem: docker
+    directory: "/php"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      docker:
+        patterns:
+          - "*"
+
+  # The actions of the workflows that ncmake does not manage. The ones it
+  # manages, listed in .github/workflows/.ncmake-workflows.json, stay out: a
+  # change by Dependabot would make ncmake flag them as locally modified and
+  # stop updating them. dependabot-excludes.yml checks that this list matches.
+  - package-ecosystem: github-actions
+    directory: "/"
+    exclude-paths:
+      - ".github/workflows/block-unconventional-commits.yml"
+      - ".github/workflows/branch-cleanup.yml"
+      - ".github/workflows/reuse.yml"
+      - ".github/workflows/workflow-updater.yml"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      actions:
+        patterns:
+          - "*"

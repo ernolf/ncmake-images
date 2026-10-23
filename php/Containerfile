@@ -28,7 +28,7 @@ ARG composer
 FROM $composer AS composer
 
 # install-php-extensions comes from the image of its release, pinned by tag and
-# digest so that a build runs a reviewed version and Renovate can update it. It is
+# digest so that a build runs a reviewed version and Dependabot can update it. It is
 # bind-mounted into the RUN instead of copied, so it never becomes a layer of the
 # image.
 FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578ff2c417790aba836bb49855543144606033eceda253 AS installer
