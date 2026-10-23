@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+
+ignored:
+  # Pinning Alpine and Debian package versions: the distributions drop an old
+  # version as soon as a fix replaces it, so a pin breaks the build instead of
+  # making it reproducible. The images are rebuilt whenever the base digest changes.
+  - DL3018
+  - DL3008
+  # pipefail would break the extension checks: grep -q leaves the pipe on the first
+  # match, php -m gets SIGPIPE, and a loaded extension would count as missing.
+  - DL4006

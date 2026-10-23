@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The Node image of ncmake, ghcr.io/ernolf/ncmake-node:latest.
+# https://github.com/ernolf/ncmake-images
+#
+#   podman build -f node/Containerfile node
+#
+# One image serves every Node line: Debian slim with git, the CA certificates, the
+# compiler node-gyp builds a native module with, the distutils an older node-gyp
+# imports and Yarn 1. It carries no Node. The core Makefile of ncmake mounts the
+# official build of the line from nodejs.org at /usr/local, so the image does not
+# change with a Node release.
+#
+# The official Node images install Yarn 1 beside Node, and a build script that calls
+# yarn without a yarn.lock relies on it. Its tarball is installed the way their
+# Dockerfile does, verified against the signature of the Yarn release key, but
+# linked into /usr/bin: /usr/local is where the Node line is mounted. An app with a
+# yarn.lock gets the yarn its packageManager names through corepack, whose shim the
+# core puts first on PATH.
+
+ARG base=docker.io/library/debian:trixie-slim
+# The Yarn 1 release and the key that signs it, as the Dockerfiles of the official
+# Node images name them (https://github.com/nodejs/docker-node).
+ARG yarn=1.22.22
+ARG yarn_key=6A010C5166006599AA17F08146C2130DFD2497F5
+
+# Yarn is fetched and verified in a stage of its own, so curl and gnupg stay out of
+# the image. keys.openpgp.org serves the Yarn key without its user ID, which gpg
+# skips with a success status, so only gpg --fingerprint tells whether the key
+# arrived and the next keyserver is needed, as in the official Dockerfiles.
+FROM $base AS yarn
+ARG yarn
+ARG yarn_key
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl gnupg dirmngr \
+ && GNUPGHOME="$(mktemp -d)" && export GNUPGHOME \
+ && { { gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "$yarn_key" && gpg --batch --fingerprint "$yarn_key"; } || { gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$yarn_key" && gpg --batch --fingerprint "$yarn_key"; }; } \
+ && curl -fsSLO --compressed "https://yarnpkg.com/downloads/$yarn/yarn-v$yarn.tar.gz" \
+ && curl -fsSLO --compressed "https://yarnpkg.com/downloads/$yarn/yarn-v$yarn.tar.gz.asc" \
+ && gpg --batch --verify "yarn-v$yarn.tar.gz.asc" "yarn-v$yarn.tar.gz" \
+ && mkdir -p /opt && tar -xzf "yarn-v$yarn.tar.gz" --no-same-owner -C /opt
+
+# Python 3.12 dropped distutils, which the gyp of a node-gyp before 10 imports, and
+# an app's lockfile can still pin one; python3-setuptools puts its own copy in
+# place of the module. libatomic1 is a library Node itself loads; the apt lists
+# only serve the install and go in the same layer.
+FROM $base
+ARG yarn
+COPY --from=yarn /opt/yarn-v$yarn /opt/yarn-v$yarn
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git python3 python3-setuptools make g++ libatomic1 && rm -rf /var/lib/apt/lists/* \
+ && ln -s /opt/yarn-v$yarn/bin/yarn /usr/bin/yarn && ln -s /opt/yarn-v$yarn/bin/yarnpkg /usr/bin/yarnpkg

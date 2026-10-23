@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Checks every Containerfile of the repository with hadolint, which also runs
+# shellcheck on each RUN. The rules it skips, and why, are in .hadolint.yaml. It runs
+# on every pull request, without a path filter, so it can be a required check.
+
+name: Lint Containerfiles
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-containerfiles-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  HADOLINT: docker.io/hadolint/hadolint:v2.15.1
+
+jobs:
+  hadolint:
+    name: hadolint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Run hadolint
+        run: |
+          set -eu
+          # shellcheck disable=SC2046 # the paths of the repository hold no spaces
+          set -- $(find . -name Containerfile -not -path './.git/*' | sort)
+          [ "$#" -gt 0 ] || { echo "::error::No Containerfile found"; exit 1; }
+          docker run --rm -v "$PWD:/src:ro" -w /src "$HADOLINT" /bin/hadolint "$@"

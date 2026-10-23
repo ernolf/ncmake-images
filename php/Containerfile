@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The PHP build image of ncmake, ghcr.io/ernolf/ncmake-php:<minor>.
+# https://github.com/ernolf/ncmake-images
+#
+#   podman build -f php/Containerfile \
+#     --build-arg base=docker.io/library/php:8.4-cli-alpine \
+#     --build-arg composer=docker.io/library/composer:2 php
+#
+# The official PHP image lacks most of the extensions a Nextcloud server loads, so
+# composer would refuse a dependency that requires one of them (phpspreadsheet
+# requires gd), and a build would not test what the server offers. This image adds
+# git, unzip and su-exec from the Alpine packages, Composer from the composer image,
+# the memory_limit of the Nextcloud CI images instead of the 128M of an image without
+# a php.ini, and the extensions, compiled by install-php-extensions, which also
+# removes the build packages again. An extension the base image already loads is
+# skipped. The build fails when an extension does not load or PHP prints a startup
+# warning: an extension that compiles can still miss a library it links against, and
+# php would print that warning before every output.
+#
+# extensions is the list the published image carries. ncmake builds the image on a
+# host with a longer one when an app's ncmake.mk adds an extension.
+
+ARG base
+ARG composer
+
+FROM $composer AS composer
+
+FROM $base
+ARG extensions="apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip"
+ARG installer="https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
+COPY --from=composer /usr/bin/composer /usr/local/bin/composer
+RUN apk add --no-cache git unzip su-exec \
+ && curl -fsSL -o /usr/local/bin/install-php-extensions "$installer" \
+ && chmod +x /usr/local/bin/install-php-extensions \
+ && for e in $extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
+ && { [ -z "$*" ] || install-php-extensions "$@"; } \
+ && for e in $extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
+ && ! php -m 2>&1 | grep -i "PHP Startup" \
+ && rm /usr/local/bin/install-php-extensions \
+ && echo "memory_limit = 768M" > "$PHP_INI_DIR/conf.d/ncmake.ini"
