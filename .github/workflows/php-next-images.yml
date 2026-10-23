@@ -57,7 +57,7 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -123,7 +123,7 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -160,7 +160,8 @@ jobs:
       # extension is installed on its own, as the Containerfile skips one the base
       # image already loads, which names the ones that do not build. One that builds
       # can still miss a library it links against, so each must also load. The list
-      # and the installer are the defaults of the ARGs in php/Containerfile.
+      # is the default of ARG extensions in php/Containerfile, the installer comes
+      # from the image of its installer stage.
       - name: Find the extensions that do not build or load on PHP ${{ matrix.php }}
         id: probe
         if: steps.full.outcome == 'failure'
@@ -170,11 +171,16 @@ jobs:
         run: |
           set -u
           exts=$(sed -n 's/^ARG extensions="\(.*\)"$/\1/p' php/Containerfile)
-          installer=$(sed -n 's/^ARG installer="\(.*\)"$/\1/p' php/Containerfile)
-          [ -n "$exts" ] && [ -n "$installer" ] || { echo "::error::No ARG extensions or ARG installer with a default in php/Containerfile"; exit 1; }
+          installer=$(sed -n 's/^FROM \([^ ]*\) AS installer$/\1/p' php/Containerfile)
+          [ -n "$exts" ] && [ -n "$installer" ] || { echo "::error::No ARG extensions with a default or no installer stage in php/Containerfile"; exit 1; }
+          # The installer image has no shell, so the script is copied out of a
+          # container that is created but never started.
+          ipe="$RUNNER_TEMP/install-php-extensions"
+          cid=$(docker create "$installer" none) && docker cp "$cid:/usr/bin/install-php-extensions" "$ipe" && docker rm "$cid" >/dev/null \
+            || { echo "::error::PHP $PHP: install-php-extensions could not be taken from $installer"; exit 1; }
           # shellcheck disable=SC2016,SC2086 # the script runs in the container, and exts is a list
-          failed=$(docker run --rm "$BASE" sh -c 'curl -fsSL -o /usr/local/bin/install-php-extensions "$1" && chmod +x /usr/local/bin/install-php-extensions || exit 1; shift; for e; do php -m | grep -qix "$e" && continue; { install-php-extensions "$e" >/dev/null 2>&1 && php -m 2>/dev/null | grep -qix "$e"; } || echo "$e"; done' probe "$installer" $exts) \
-            || { echo "::error::PHP $PHP: install-php-extensions could not be fetched into $BASE"; exit 1; }
+          failed=$(docker run --rm -v "$ipe:/usr/local/bin/install-php-extensions:ro" "$BASE" sh -c 'for e; do php -m | grep -qix "$e" && continue; { install-php-extensions "$e" >/dev/null 2>&1 && php -m 2>/dev/null | grep -qix "$e"; } || echo "$e"; done' probe $exts) \
+            || { echo "::error::PHP $PHP: the extension probe could not run on $BASE"; exit 1; }
           if [ -z "$failed" ]; then
             echo "::error::PHP $PHP: every extension builds and loads on its own, so the build failed in another step; its log above names it"
             exit 1

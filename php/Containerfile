@@ -27,16 +27,19 @@ ARG composer
 
 FROM $composer AS composer
 
+# install-php-extensions comes from the image of its release, pinned by tag and
+# digest so that a build runs a reviewed version and Renovate can update it. It is
+# bind-mounted into the RUN instead of copied, so it never becomes a layer of the
+# image.
+FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578ff2c417790aba836bb49855543144606033eceda253 AS installer
+
 FROM $base
 ARG extensions="apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip"
-ARG installer="https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
-RUN apk add --no-cache git unzip su-exec \
- && curl -fsSL -o /usr/local/bin/install-php-extensions "$installer" \
- && chmod +x /usr/local/bin/install-php-extensions \
+RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
+    apk add --no-cache git unzip su-exec \
  && for e in $extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
  && { [ -z "$*" ] || install-php-extensions "$@"; } \
  && for e in $extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
  && ! php -m 2>&1 | grep -i "PHP Startup" \
- && rm /usr/local/bin/install-php-extensions \
  && echo "memory_limit = 768M" > "$PHP_INI_DIR/conf.d/ncmake.ini"
