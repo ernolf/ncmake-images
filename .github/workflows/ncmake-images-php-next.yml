@@ -5,15 +5,15 @@
 # master, ghcr.io/ernolf/ncmake-php:<minor>-next, for amd64 and arm64, built from
 # php/Containerfile. https://github.com/ernolf/ncmake-images
 #
-# php-images.yml covers the minors up to the PHP ceiling in lib/versioncheck.php of
+# ncmake-images-php.yml covers the minors up to the PHP ceiling in lib/versioncheck.php of
 # Nextcloud master. This one covers every minor above it that PHP has built: the
 # release when there is one, otherwise the newest alpha, beta or RC, which the
 # Docker Official Images keep under php:<minor>-rc. Once master allows a minor,
-# php-images.yml takes it over and this workflow leaves it alone, so no minor is
+# ncmake-images-php.yml takes it over and this workflow leaves it alone, so no minor is
 # ever configured here. ncmake-php:next names the newest minor of the run, and the
 # label ncmake.php the exact PHP of each image, for example 8.6.0RC3.
 #
-# The inputs fingerprint is that of php-images.yml. When the build fails, the
+# The inputs fingerprint is that of ncmake-images-php.yml. When the build fails, the
 # extensions of the Containerfile are installed one by one on the base image, and
 # the image is built again without those that do not build or do not load on that
 # PHP. It is published so that php-compat can run, with the label ncmake.missing
@@ -28,7 +28,7 @@ on:
     branches: [main]
     paths:
       - php/Containerfile
-      - .github/workflows/php-next-images.yml
+      - .github/workflows/ncmake-images-php-next.yml
   workflow_dispatch:
     inputs:
       rebuild:
@@ -86,7 +86,7 @@ jobs:
               m=$major.$minor
               if [ "$m" = "$ceiling" ] || [ "$(printf '%s\n' "$m" "$ceiling" | sort -V | tail -1)" != "$m" ]; then continue; fi
               base=
-              for tag in "$m-cli-alpine" "$m-rc-cli-alpine"; do
+              for tag in "${m}-cli-alpine" "${m}-rc-cli-alpine"; do
                 if digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://docker.io/library/php:$tag" 2>/dev/null); then
                   base=docker.io/library/php:$tag
                   break
@@ -96,7 +96,7 @@ jobs:
               php=$(skopeo inspect --config "docker://docker.io/library/php@$digest" | jq -r '.config.Env[] | select(startswith("PHP_VERSION=")) | ltrimstr("PHP_VERSION=")')
               newest=$m
               sum=$(printf '%s\n' "$file" "$digest" "$cdigest" | sha256sum | cut -d ' ' -f 1)
-              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$m-next" 2>/dev/null || :)
+              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:${m}-next" 2>/dev/null || :)
               if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
                 echo "PHP $m ($php from $base): unchanged"
                 continue

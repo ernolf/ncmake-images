@@ -1,0 +1,122 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Publishes the Node image of ncmake, ghcr.io/ernolf/ncmake-node:latest, for amd64
+# and arm64, built from node/Containerfile.
+# https://github.com/ernolf/ncmake-images
+#
+# The base image is the default of ARG base in node/Containerfile, pinned here to
+# its current digest. The image is built again only when its inputs change: that
+# digest or node/Containerfile, which holds the Yarn release and its key too. Their
+# fingerprint is the label ncmake.inputs of the published image, so a day without a
+# change costs a few registry requests. workflow_dispatch with rebuild builds it
+# whether they changed or not.
+
+name: Node image
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - node/Containerfile
+      - .github/workflows/ncmake-images-node.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build the image, whether its inputs changed or not
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-images
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/ernolf/ncmake-node:latest
+
+jobs:
+  plan:
+    name: Compare the inputs with the published image
+    if: github.repository == 'ernolf/ncmake-images'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      base: ${{ steps.plan.outputs.base }}
+      sum: ${{ steps.plan.outputs.sum }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the inputs with the published image
+        id: plan
+        env:
+          REBUILD: ${{ inputs.rebuild || false }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          base=$(sed -n 's/^ARG base=\(.*\)$/\1/p' node/Containerfile)
+          [ -n "$base" ] || { echo "::error::No ARG base with a default in node/Containerfile"; exit 1; }
+          file=$(cat node/Containerfile)
+          printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
+          digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$base")
+          sum=$(printf '%s\n' "$file" "$digest" | sha256sum | cut -d ' ' -f 1)
+          published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE" 2>/dev/null || :)
+          if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
+            echo "$IMAGE: unchanged"
+            build=false
+          else
+            echo "$IMAGE: to build"
+            build=true
+          fi
+          {
+            echo "build=$build"
+            echo "base=$base@$digest"
+            echo "sum=$sum"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and push the Node image
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: node
+          file: node/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}
+          build-args: |
+            base=${{ needs.plan.outputs.base }}
+          labels: |
+            ncmake.inputs=${{ needs.plan.outputs.sum }}
+            org.opencontainers.image.source=https://github.com/ernolf/ncmake-images

@@ -1,0 +1,4 @@
+{
+    "name": "ncmake-images PHP",
+    "description": "Publish ghcr.io/ernolf/ncmake-php:<minor> for amd64 and arm64, for every PHP minor from the floor ncmake enforces to the ceiling of Nextcloud master, rebuilt when its inputs change"
+}

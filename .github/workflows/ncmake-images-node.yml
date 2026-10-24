@@ -21,7 +21,7 @@ on:
     branches: [main]
     paths:
       - node/Containerfile
-      - .github/workflows/node-images.yml
+      - .github/workflows/ncmake-images-node.yml
   workflow_dispatch:
     inputs:
       rebuild:
