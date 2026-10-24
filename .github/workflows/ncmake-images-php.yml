@@ -25,7 +25,7 @@ on:
     branches: [main]
     paths:
       - php/Containerfile
-      - .github/workflows/php-images.yml
+      - .github/workflows/ncmake-images-php.yml
   workflow_dispatch:
     inputs:
       rebuild:
@@ -84,7 +84,7 @@ jobs:
               m=$major.$minor
               [ "$(printf '%s\n' "$floor" "$m" | sort -V | head -1)" = "$floor" ] || continue
               [ "$(printf '%s\n' "$m" "$ceiling" | sort -V | tail -1)" = "$ceiling" ] || continue
-              base=docker.io/library/php:$m-cli-alpine
+              base=docker.io/library/php:${m}-cli-alpine
               if ! digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
                 echo "::notice::$base does not exist, PHP $m is skipped"
                 continue

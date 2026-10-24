@@ -1,0 +1,4 @@
+{
+    "name": "ncmake-images Node",
+    "description": "Publish ghcr.io/ernolf/ncmake-node:latest for amd64 and arm64, rebuilt when its inputs change"
+}
