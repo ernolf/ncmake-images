@@ -29,6 +29,11 @@
     "sha": "8aca19907bf38c64a4802c52babc10678d65b63a",
     "source": "local"
   },
+  "ncmake-images-server.yml": {
+    "hash": "a138d05202c3d48813410ce439f50f25d87f27b53901f39c0b18a1b5a7276609",
+    "sha": "1da7b618bf1b47d49d4aa3675419677494bd3d76",
+    "source": "local"
+  },
   "reuse.yml": {
     "hash": "7507fa539b8cdec70a5de786fbac4e38f1e53f9df404dbfc75bb2fe7950bc010",
     "sha": "67fdafc440e24937ece9f2f16d7f2c2df2c7efa5",

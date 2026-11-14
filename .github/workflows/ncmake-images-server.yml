@@ -1,0 +1,175 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# Publishes the install-test server of ncmake, ghcr.io/ernolf/ncmake-server:<major>
+# and ncmake-server:master, for amd64 and arm64, built from server/Containerfile.
+# https://github.com/ernolf/ncmake-images
+#
+# The majors are the maintained ones: those above the newest end-of-life major and
+# below the major of master, as data/nextcloud-server.json of ncmake main names
+# both, read through the bootstrap stub of this repository. Each is built from
+# server/releases/latest-<major>.tar.bz2 of download.nextcloud.com, and master from
+# server/daily/latest-master.tar.bz2. A major without a release is skipped.
+#
+# Each server runs on the highest PHP minor it allows, read from lib/versioncheck.php
+# of its branch, and carries the profiler app of the same branch.
+#
+# An image is built again only when its inputs change: the digest of its base image,
+# the checksum of the server tarball, the commit of the profiler branch or
+# server/Containerfile. Their fingerprint is the label ncmake.inputs of the published
+# image, so a day without a change costs a few requests. The tarball of master is a
+# new one every day. workflow_dispatch with rebuild builds every image.
+
+name: Server images
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - server/Containerfile
+      - .github/workflows/ncmake-images-server.yml
+  workflow_dispatch:
+    inputs:
+      rebuild:
+        description: Build every image, whether its inputs changed or not
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-images
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/ernolf/ncmake-server
+
+jobs:
+  plan:
+    name: Find the servers whose inputs changed
+    if: github.repository == 'ernolf/ncmake-images'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compare the inputs of each server with the published image
+        id: plan
+        env:
+          REBUILD: ${{ inputs.rebuild || false }}
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          DOWNLOAD: https://download.nextcloud.com/server
+          SERVER_RAW: https://raw.githubusercontent.com/nextcloud/server
+          PROFILER: https://github.com/nextcloud/profiler
+        run: |
+          set -eu
+          # shellcheck disable=SC2016 # the single quotes keep $($*) for make
+          eol=$(make -s --eval 'print-%: ; @echo $($*)' print-nc_eol)
+          # shellcheck disable=SC2016 # as above
+          master=$(make -s --eval 'print-%: ; @echo $($*)' print-nc_master)
+          [ -n "$eol" ] || { echo "::error::No newest end-of-life Nextcloud major"; exit 1; }
+          [ -n "$master" ] || { echo "::error::No major of Nextcloud master"; exit 1; }
+          echo "Nextcloud $((eol + 1)) to $master (master)"
+          file=$(cat server/Containerfile)
+          printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
+          matrix='[]'
+          for major in $(seq "$((eol + 1))" "$master"); do
+            if [ "$major" = "$master" ]; then
+              tag=master
+              branch=master
+              url=$DOWNLOAD/daily/latest-master.tar.bz2
+            else
+              tag=$major
+              branch=stable$major
+              url=$DOWNLOAD/releases/latest-$major.tar.bz2
+            fi
+            tarball=$(curl -fsSL --retry 3 "$url.sha256" | head -1 | cut -d ' ' -f 1) || tarball=''
+            if [ -z "$tarball" ]; then
+              echo "::notice::$url has no checksum, Nextcloud $tag is skipped"
+              continue
+            fi
+            ceiling=$(curl -fsSL --retry 3 "$SERVER_RAW/$branch/lib/versioncheck.php" | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1)
+            [ -n "$ceiling" ] || { echo "::error::No PHP ceiling in lib/versioncheck.php of Nextcloud $branch"; exit 1; }
+            # versioncheck.php refuses PHP_VERSION_ID >= ceiling, so the highest minor
+            # is the one below it. A minor without an image yet falls back to the one
+            # below, down to the .0 of the same PHP major.
+            id=$((ceiling - 100))
+            digest=''
+            while :; do
+              minor=$((id / 10000)).$((id % 10000 / 100))
+              base=docker.io/library/php:${minor}-apache
+              if digest=$(skopeo inspect --retry-times 3 --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
+                break
+              fi
+              echo "::notice::$base does not exist, Nextcloud $tag falls back to the minor below"
+              digest=''
+              [ "$((id % 10000))" -ge 100 ] || break
+              id=$((id - 100))
+            done
+            [ -n "$digest" ] || { echo "::error::No PHP image for Nextcloud $tag"; exit 1; }
+            commit=$(git ls-remote "$PROFILER" "refs/heads/$branch" | cut -f 1)
+            [ -n "$commit" ] || { echo "::error::No branch $branch in $PROFILER"; exit 1; }
+            sum=$(printf '%s\n' "$file" "$digest" "$tarball" "$commit" | sha256sum | cut -d ' ' -f 1)
+            published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag" 2>/dev/null || :)
+            if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
+              echo "Nextcloud $tag: unchanged"
+              continue
+            fi
+            echo "Nextcloud $tag on PHP $minor: to build"
+            matrix=$(printf '%s' "$matrix" | jq -c --arg tag "$tag" --arg php "$minor" --arg base "$base@$digest" --arg server "$url" --arg profiler "$PROFILER/archive/$commit.tar.gz" --arg sum "$sum" '. + [{tag: $tag, php: $php, base: $base, server: $server, profiler: $profiler, sum: $sum}]')
+          done
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and push Nextcloud ${{ matrix.tag }}
+    needs: plan
+    if: needs.plan.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: server
+          file: server/Containerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ env.IMAGE }}:${{ matrix.tag }}
+          build-args: |
+            base=${{ matrix.base }}
+            server=${{ matrix.server }}
+            profiler=${{ matrix.profiler }}
+          labels: |
+            ncmake.inputs=${{ matrix.sum }}
+            ncmake.php=${{ matrix.php }}
+            org.opencontainers.image.source=https://github.com/ernolf/ncmake-images
