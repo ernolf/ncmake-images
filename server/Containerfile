@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The install-test server of ncmake, ghcr.io/ernolf/ncmake-server:<major>.
+# https://github.com/ernolf/ncmake-images
+#
+#   podman build -f server/Containerfile \
+#     --build-arg base=docker.io/library/php:8.5-apache \
+#     --build-arg server=https://download.nextcloud.com/server/releases/latest-35.tar.bz2 \
+#     --build-arg profiler=https://github.com/nextcloud/profiler/archive/refs/heads/stable35.tar.gz server
+#
+# A Nextcloud server that is already installed, so a test only copies an app into
+# custom_apps, enables it and uses it. The server is the signed tarball of
+# download.nextcloud.com, checked against its signature, and not a checkout: a
+# source build creates what a shipped tarball may lack, and the test is there to
+# find exactly that. It is installed on SQLite while the image is built.
+#
+# The extensions and the php.ini values are those of the official image
+# (nextcloud/docker), compiled by install-php-extensions, which also removes the
+# build packages again. The build fails when an extension does not load or PHP
+# prints a startup warning.
+#
+# The profiler app (nextcloud/profiler) of the same major is in custom_apps and not
+# enabled, so a plain install test runs without debug mode and a profiling run only
+# calls occ profiler:enable. Its occ commands need no built frontend.
+#
+# The admin account is a fixed one of a server that is thrown away after the test.
+# The image is not meant to be reachable from anywhere but the host of the test.
+
+ARG base
+
+# install-php-extensions comes from the image of its release, pinned by tag and
+# digest so that a build runs a reviewed version and Dependabot can update it. It is
+# bind-mounted into the RUN instead of copied, so it never becomes a layer of the
+# image.
+FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578ff2c417790aba836bb49855543144606033eceda253 AS installer
+
+FROM $base
+ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick intl ldap memcached pcntl pdo_mysql pdo_pgsql redis sysvsem zip"
+RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
+    for e in $extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
+ && { [ -z "$*" ] || install-php-extensions "$@"; } \
+ && for e in $extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
+ && ! php -m 2>&1 | grep -i "PHP Startup" \
+ && { echo "opcache.enable=1"; \
+      echo "opcache.interned_strings_buffer=32"; \
+      echo "opcache.max_accelerated_files=10000"; \
+      echo "opcache.memory_consumption=128"; \
+      echo "opcache.save_comments=1"; \
+      echo "opcache.revalidate_freq=60"; \
+      echo "opcache.jit=1255"; \
+      echo "opcache.jit_buffer_size=8M"; \
+      echo "apc.enable_cli=1"; \
+      echo "apc.serializer=igbinary"; \
+      echo "session.serialize_handler=igbinary"; \
+      echo "session.upload_progress.enabled=0"; \
+      echo "memory_limit=512M"; \
+      echo "upload_max_filesize=512M"; \
+      echo "post_max_size=512M"; \
+    } > "$PHP_INI_DIR/conf.d/ncmake.ini" \
+ && a2enmod -q rewrite headers env dir mime \
+ && echo "ServerName localhost" > /etc/apache2/conf-available/ncmake.conf \
+ && a2enconf -q ncmake
+
+# The key that signs the server tarballs, https://nextcloud.com/nextcloud.asc. The
+# key file is fetched, the fingerprint is what a signature has to name.
+ARG signing_key=28806A878AE423A28372792ED75899B9A724937A
+ARG server
+ARG profiler
+ARG admin_user=admin
+ARG admin_pass=admin
+# hadolint ignore=SC2015
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bzip2 gnupg \
+ && work="$(mktemp -d)" \
+ && export GNUPGHOME="$work/gnupg" \
+ && mkdir -m 700 "$GNUPGHOME" \
+ && curl -fsSL --retry 5 --retry-all-errors -o "$work/server.tar.bz2" "$server" \
+ && curl -fsSL --retry 5 --retry-all-errors -o "$work/server.tar.bz2.asc" "$server.asc" \
+ && curl -fsSL --retry 5 --retry-all-errors -o "$work/nextcloud.asc" https://nextcloud.com/nextcloud.asc \
+ && curl -fsSL --retry 5 --retry-all-errors -o "$work/profiler.tar.gz" "$profiler" \
+ && gpg --batch --quiet --import "$work/nextcloud.asc" \
+ && gpg --batch --status-fd 1 --verify "$work/server.tar.bz2.asc" "$work/server.tar.bz2" > "$work/verify" 2>/dev/null \
+ && grep -q "^\[GNUPG:\] VALIDSIG .* $signing_key\$" "$work/verify" \
+ && { gpgconf --kill all || :; } \
+ && tar -xjf "$work/server.tar.bz2" -C /var/www/html --strip-components=1 \
+ && mkdir -p /var/www/html/custom_apps/profiler /var/www/html/data \
+ && tar -xzf "$work/profiler.tar.gz" -C /var/www/html/custom_apps/profiler --strip-components=1 \
+ && rm -rf "$work" \
+ && { echo "<?php"; \
+      echo "\$CONFIG = ["; \
+      echo "  'apps_paths' => ["; \
+      echo "    ['path' => '/var/www/html/apps', 'url' => '/apps', 'writable' => false],"; \
+      echo "    ['path' => '/var/www/html/custom_apps', 'url' => '/custom_apps', 'writable' => true],"; \
+      echo "  ],"; \
+      echo "];"; \
+    } > /var/www/html/config/apps.config.php \
+ && chown -R www-data:www-data /var/www/html \
+ && occ() { runuser -u www-data -- php /var/www/html/occ "$@"; } \
+ && occ maintenance:install --no-interaction --database sqlite --admin-user "$admin_user" --admin-pass "$admin_pass" --data-dir /var/www/html/data \
+ && occ config:system:set trusted_domains 1 --value "*" \
+ && occ config:system:set overwrite.cli.url --value http://localhost \
+ && occ config:system:set htaccess.RewriteBase --value / \
+ && occ maintenance:update:htaccess \
+ && occ background:cron \
+ && occ status --output json | grep -q '"installed":true' \
+ && apt-get purge -y --auto-remove bzip2 gnupg \
+ && rm -rf /var/lib/apt/lists/*

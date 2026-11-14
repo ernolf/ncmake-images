@@ -1,0 +1,4 @@
+{
+    "name": "ncmake-images Server",
+    "description": "Publish ghcr.io/ernolf/ncmake-server:<major> and :master for amd64 and arm64, an installed Nextcloud server per maintained major on the highest PHP it allows, rebuilt when its inputs change"
+}

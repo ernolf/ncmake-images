@@ -25,6 +25,24 @@ updates:
         patterns:
           - "*"
 
+  # The installer stage of server/Containerfile, as above.
+  - package-ecosystem: docker
+    directory: "/server"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
+    groups:
+      docker:
+        patterns:
+          - "*"
+
   # The actions of the repository's own workflows (.ncmake/workflows/). With a
   # directory other than "/", Dependabot reads only the YAML files of that
   # directory, so it never opens .github/workflows: those workflows are managed
