@@ -19,8 +19,11 @@
 # warning: an extension that compiles can still miss a library it links against, and
 # php would print that warning before every output.
 #
-# extensions is the list the published image carries. ncmake builds the image on a
-# host with a longer one when an app's ncmake.mk adds an extension.
+# extensions is the list the published image carries. It also names the extensions
+# Nextcloud master requires, although every base image so far loads them: a base that
+# drops one, as php:8.6 dropped mbstring, gets it compiled in or fails the build. ncmake
+# builds the image on a host with a longer list when an app's ncmake.mk adds an
+# extension.
 
 ARG base
 ARG composer
@@ -31,10 +34,10 @@ FROM $composer AS composer
 # digest so that a build runs a reviewed version and Dependabot can update it. It is
 # bind-mounted into the RUN instead of copied, so it never becomes a layer of the
 # image.
-FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578ff2c417790aba836bb49855543144606033eceda253 AS installer
+FROM ghcr.io/mlocati/php-extension-installer:2.13.2@sha256:4fd45396c16685266d32bf147a24ecd5e81029d3820295895bf4a90131190ac9 AS installer
 
 FROM $base
-ARG extensions="apcu bcmath bz2 calendar decimal exif ffi ftp gd gettext gmp igbinary imagick inotify intl ldap memcached mysqli pcntl pdo_mysql pdo_pgsql pgsql redis shmop smbclient sockets sysvmsg sysvsem sysvshm xsl zip"
+ARG extensions="apcu bcmath bz2 calendar ctype curl decimal dom exif ffi fileinfo ftp gd gettext gmp igbinary imagick inotify intl ldap libxml mbstring memcached mysqli openssl pcntl pdo pdo_mysql pdo_pgsql pgsql posix redis session shmop simplexml smbclient sockets sysvmsg sysvsem sysvshm xml xmlreader xmlwriter xsl zip zlib"
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
     apk add --no-cache git unzip su-exec \
