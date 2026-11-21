@@ -24,6 +24,13 @@
 # enabled, so a plain install test runs without debug mode and a profiling run only
 # calls occ profiler:enable. Its occ commands need no built frontend.
 #
+# What an app's PHPUnit suite needs of the server is there as well and changes
+# nothing for a plain install test: tests/ of the server, which the tarball does not
+# ship and whose bootstrap and Test\TestCase the test bootstraps of apps load, from
+# the commit $OC_Build of the tarball names; pcov, installed but disabled, so a run
+# switches coverage on with -d pcov.enabled=1; and the image formats of the preview
+# tests, which the build checks.
+#
 # The admin account is a fixed one of a server that is thrown away after the test.
 # The image is not meant to be reachable from anywhere but the host of the test.
 
@@ -37,11 +44,20 @@ FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578
 
 FROM $base
 ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick intl ldap memcached pcntl pdo_mysql pdo_pgsql redis sysvsem zip"
+# Only for test runs: pcov collects the coverage of a PHPUnit run.
+ARG test_extensions="pcov"
+# The formats the preview providers of the server hand to Imagick. Their delegates
+# come with the ImageMagick packages imagick pulls in, whose names change with the
+# Debian release of the base, so the build checks the formats, not the packages.
+ARG image_formats="SVG PDF HEIC AVIF WEBP"
+# The single quotes keep $argv and $f for PHP.
+# hadolint ignore=SC2016
 RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
-    for e in $extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
+    for e in $extensions $test_extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
  && { [ -z "$*" ] || install-php-extensions "$@"; } \
- && for e in $extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
+ && for e in $extensions $test_extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
  && ! php -m 2>&1 | grep -i "PHP Startup" \
+ && php -r 'foreach (array_slice($argv, 1) as $f) { if (!in_array($f, Imagick::queryFormats(), true)) { fwrite(STDERR, "Imagick lacks $f\n"); exit(1); } }' $image_formats \
  && { echo "opcache.enable=1"; \
       echo "opcache.interned_strings_buffer=32"; \
       echo "opcache.max_accelerated_files=10000"; \
@@ -57,6 +73,7 @@ RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,targ
       echo "memory_limit=512M"; \
       echo "upload_max_filesize=512M"; \
       echo "post_max_size=512M"; \
+      echo "pcov.enabled=0"; \
     } > "$PHP_INI_DIR/conf.d/ncmake.ini" \
  && a2enmod -q rewrite headers env dir mime \
  && echo "ServerName localhost" > /etc/apache2/conf-available/ncmake.conf \
@@ -67,11 +84,13 @@ RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,targ
 ARG signing_key=28806A878AE423A28372792ED75899B9A724937A
 ARG server
 ARG profiler
+# The source of the server, for tests/ of the commit the tarball was built from.
+ARG server_repo=https://github.com/nextcloud/server
 ARG admin_user=admin
 ARG admin_pass=admin
 # hadolint ignore=SC2015
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bzip2 gnupg \
+ && apt-get install -y --no-install-recommends bzip2 git gnupg \
  && work="$(mktemp -d)" \
  && export GNUPGHOME="$work/gnupg" \
  && mkdir -m 700 "$GNUPGHOME" \
@@ -86,6 +105,13 @@ RUN apt-get update \
  && tar -xjf "$work/server.tar.bz2" -C /var/www/html --strip-components=1 \
  && mkdir -p /var/www/html/custom_apps/profiler /var/www/html/data \
  && tar -xzf "$work/profiler.tar.gz" -C /var/www/html/custom_apps/profiler --strip-components=1 \
+ && commit="$(sed -n "s/^\$OC_Build = '.* \([0-9a-f]\{40\}\)';\$/\1/p" /var/www/html/version.php)" \
+ && [ -n "$commit" ] \
+ && git -C "$work" init -q tests \
+ && git -C "$work/tests" fetch -q --depth 1 --filter=blob:none "$server_repo" "$commit" \
+ && git -C "$work/tests" sparse-checkout set tests \
+ && git -C "$work/tests" checkout -q FETCH_HEAD \
+ && mv "$work/tests/tests" /var/www/html/tests \
  && rm -rf "$work" \
  && { echo "<?php"; \
       echo "\$CONFIG = ["; \
@@ -104,5 +130,5 @@ RUN apt-get update \
  && occ maintenance:update:htaccess \
  && occ background:cron \
  && occ status --output json | grep -q '"installed":true' \
- && apt-get purge -y --auto-remove bzip2 gnupg \
+ && apt-get purge -y --auto-remove bzip2 git gnupg \
  && rm -rf /var/lib/apt/lists/*
