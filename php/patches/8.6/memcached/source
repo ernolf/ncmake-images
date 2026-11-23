@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 3.4.0, uses XtOffsetOf() and zval_dtor(), which PHP 8.6
+# removed, and the session save_path as a char *. The merge of the fix for PHP 8.6
+# builds. master after it is not used: it adds the configure option --with-zstd to
+# package.xml under the same version, so install-php-extensions answers the prompts
+# of pecl install out of step.
+https://codeload.github.com/php-memcached-dev/php-memcached/tar.gz/3c73b4f0abe5bbfbbbe686f44a8ae52fcd3e67ee dec97a1eda532f4eca1deaf1eaf2f732b4b65934da78b2cf53ee881679c59b60
