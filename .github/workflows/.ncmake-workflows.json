@@ -20,8 +20,8 @@
     "source": "local"
   },
   "ncmake-images-php-next.yml": {
-    "hash": "b3f530e1e31f30c3cdf94512edba88c37cc1505975ff1aa043216c92d68fc1c3",
-    "sha": "7be0aaec65ba7fda25730648616021ccdb83ef63",
+    "hash": "5c21fc2c9b0b80df787a93f751e6666d71ca5a4826a0e677ec2513069db4c73e",
+    "sha": "75292ebb46a228b6a83b8cf050ed1bcb2bc17a1b",
     "source": "local"
   },
   "ncmake-images-php.yml": {
