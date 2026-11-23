@@ -39,8 +39,8 @@ FROM ghcr.io/mlocati/php-extension-installer:2.13.3@sha256:edda5f9d936fba9b495bd
 # The source directories of the extensions whose PECL release does not build on the
 # PHP of the base image yet, one per extension, named after it. An extension with a
 # directory here is compiled from it instead of from PECL. The stage is empty;
-# ncmake-images-php-next.yml replaces it with the build context sources, which it
-# prepares from php/patches for a PHP ahead of Nextcloud master.
+# ncmake-images-php.yml replaces it with the build context sources, which it
+# prepares from php/patches/<minor> for the PHP minor of the base image.
 FROM scratch AS sources
 
 FROM $base
