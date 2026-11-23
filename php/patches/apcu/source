@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 5.1.28, calls php_verror() with the params argument
+# that PHP 8.6 removed. master no longer does, see version.patch.
+https://codeload.github.com/krakjoe/apcu/tar.gz/fb2c942552a3f5dab7f4dea4afb5cf0831222c57 7f9d03dfabaf5961021c529f48a61386b73cd697cbacd410008ec32bc2d038c6

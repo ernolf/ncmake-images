@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 1.2.0dev, calls php_error_docref1(), which PHP 8.6
+# removed. master builds.
+https://codeload.github.com/eduardok/libsmbclient-php/tar.gz/0a2783dc796e752e87560b647c2d1831398d46f1 453f7eb6ced8664774b78836ab422896b79729b1a831daa66cefc3cf76968edf

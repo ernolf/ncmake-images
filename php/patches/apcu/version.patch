@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# pecl install refuses the version of package.xml on master, 5.1.29-dev; the
+# PEAR version format writes a development version without the hyphen.
+
+--- a/package.xml
++++ b/package.xml
+@@ -30,7 +30,7 @@
+  </lead>
+  <date>2025-12-07</date>
+  <version>
+-  <release>5.1.29-dev</release>
++  <release>5.1.29dev</release>
+   <api>5.1.18</api>
+  </version>
+  <stability>
