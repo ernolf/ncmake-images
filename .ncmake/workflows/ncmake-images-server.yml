@@ -14,9 +14,16 @@
 # Each server runs on the highest PHP minor it allows, read from lib/versioncheck.php
 # of its branch, and carries the profiler app of the same branch.
 #
+# On a PHP minor ahead of PECL, an extension of the server with a directory in
+# php/patches/<minor> is compiled from its patched source, prepared by
+# php/prepare-sources.sh, which the label ncmake.patched names; that covers pcov,
+# which ncmake-php does not carry. An extension the label ncmake.missing of
+# ncmake-php:<minor> names is left out, and the server image carries that label too.
+#
 # An image is built again only when its inputs change: the digest of its base image,
-# the checksum of the server tarball, the commit of the profiler branch or
-# server/Containerfile. Their fingerprint is the label ncmake.inputs of the published
+# the checksum of the server tarball, the commit of the profiler branch,
+# server/Containerfile, the files of php/patches/<minor> or the label ncmake.missing
+# of ncmake-php:<minor>. Their fingerprint is the label ncmake.inputs of the published
 # image, so a day without a change costs a few requests. The tarball of master is a
 # new one every day. workflow_dispatch with rebuild builds every image.
 
@@ -29,6 +36,8 @@ on:
     branches: [main]
     paths:
       - server/Containerfile
+      - php/patches/**
+      - php/prepare-sources.sh
       - .github/workflows/ncmake-images-server.yml
   workflow_dispatch:
     inputs:
@@ -46,6 +55,7 @@ concurrency:
 
 env:
   IMAGE: ghcr.io/ernolf/ncmake-server
+  PHP_IMAGE: ghcr.io/ernolf/ncmake-php
 
 jobs:
   plan:
@@ -119,14 +129,21 @@ jobs:
             [ -n "$digest" ] || { echo "::error::No PHP image for Nextcloud $tag"; exit 1; }
             commit=$(git ls-remote "$PROFILER" "refs/heads/$branch" | cut -f 1)
             [ -n "$commit" ] || { echo "::error::No branch $branch in $PROFILER"; exit 1; }
-            sum=$(printf '%s\n' "$file" "$digest" "$tarball" "$commit" | sha256sum | cut -d ' ' -f 1)
+            # Every minor a server allows is at most the ceiling of master, so its
+            # PHP image is ncmake-php:<minor>, not <minor>-next. A label the image
+            # lacks reads as <no value>.
+            missing=$(skopeo inspect --retry-times 3 --no-tags --format '{{index .Labels "ncmake.missing"}}' "docker://$PHP_IMAGE:$minor" 2>/dev/null) \
+              || { echo "::error::No $PHP_IMAGE:$minor for Nextcloud $tag"; exit 1; }
+            [ "$missing" != '<no value>' ] || missing=
+            patches=$(if [ -d "php/patches/$minor" ]; then find "php/patches/$minor" -type f | LC_ALL=C sort | xargs sha256sum; fi)
+            sum=$(printf '%s\n' "$file" "$digest" "$tarball" "$commit" "$patches" "$missing" | sha256sum | cut -d ' ' -f 1)
             published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag" 2>/dev/null || :)
             if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
               echo "Nextcloud $tag: unchanged"
               continue
             fi
             echo "Nextcloud $tag on PHP $minor: to build"
-            matrix=$(printf '%s' "$matrix" | jq -c --arg tag "$tag" --arg php "$minor" --arg base "$base@$digest" --arg server "$url" --arg profiler "$PROFILER/archive/$commit.tar.gz" --arg sum "$sum" '. + [{tag: $tag, php: $php, base: $base, server: $server, profiler: $profiler, sum: $sum}]')
+            matrix=$(printf '%s' "$matrix" | jq -c --arg tag "$tag" --arg php "$minor" --arg base "$base@$digest" --arg server "$url" --arg profiler "$PROFILER/archive/$commit.tar.gz" --arg missing "$missing" --arg sum "$sum" '. + [{tag: $tag, php: $php, base: $base, server: $server, profiler: $profiler, missing: $missing, sum: $sum}]')
           done
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -157,10 +174,55 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # The build context sources holds the patched source of every extension of
+      # the server that php/patches/<minor> has a directory for, and the extension
+      # lists lose those ncmake-php:<minor> lacks. The lists are the defaults of ARG
+      # extensions and ARG test_extensions in server/Containerfile.
+      - name: Prepare the patched sources of PHP ${{ matrix.php }}
+        id: sources
+        env:
+          TAG: ${{ matrix.tag }}
+          MINOR: ${{ matrix.php }}
+          MISSING: ${{ matrix.missing }}
+        run: |
+          set -eu
+          exts=$(sed -n 's/^ARG extensions="\(.*\)"$/\1/p' server/Containerfile)
+          tests=$(sed -n 's/^ARG test_extensions="\(.*\)"$/\1/p' server/Containerfile)
+          [ -n "$exts" ] && [ -n "$tests" ] || { echo "::error::No ARG extensions or ARG test_extensions with a default in server/Containerfile"; exit 1; }
+          src="$RUNNER_TEMP/sources"
+          use="$RUNNER_TEMP/patched"
+          mkdir -p "$use"
+          sh php/prepare-sources.sh "$MINOR" "$src"
+          patched=
+          for e in $exts $tests; do
+            case " $MISSING " in *" $e "*) continue ;; esac
+            [ -d "$src/$e" ] || continue
+            mv "$src/$e" "$use/"
+            patched="$patched $e"
+          done
+          keep=
+          for e in $exts; do
+            case " $MISSING " in *" $e "*) ;; *) keep="$keep $e" ;; esac
+          done
+          keep_tests=
+          for e in $tests; do
+            case " $MISSING " in *" $e "*) ;; *) keep_tests="$keep_tests $e" ;; esac
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::notice::PHP $MINOR: Nextcloud $TAG is built without $MISSING, which ncmake-php:$MINOR lacks"
+          fi
+          {
+            echo "keep=${keep# }"
+            echo "keep_tests=${keep_tests# }"
+            echo "patched=${patched# }"
+            echo "context=$use"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: server
           file: server/Containerfile
+          build-contexts: sources=${{ steps.sources.outputs.context }}
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
@@ -169,7 +231,11 @@ jobs:
             base=${{ matrix.base }}
             server=${{ matrix.server }}
             profiler=${{ matrix.profiler }}
+            extensions=${{ steps.sources.outputs.keep }}
+            test_extensions=${{ steps.sources.outputs.keep_tests }}
           labels: |
             ncmake.inputs=${{ matrix.sum }}
             ncmake.php=${{ matrix.php }}
+            ncmake.patched=${{ steps.sources.outputs.patched }}
+            ncmake.missing=${{ matrix.missing }}
             org.opencontainers.image.source=https://github.com/ernolf/ncmake-images

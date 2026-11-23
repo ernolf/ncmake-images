@@ -20,13 +20,13 @@
     "source": "local"
   },
   "ncmake-images-php.yml": {
-    "hash": "730d18331ba91096a7b7ddc1e1af5a66ec304bfc60a970f126fc64444cffd0a5",
-    "sha": "d95a67ae959f876532c22b4c8d2aaf52881c6508",
+    "hash": "a54a3305e7a40e0e84bc2eb8d79f0c0b3a9702e78e24765da7e29e1bff3d9c07",
+    "sha": "aaccfbe9a74ff9b3265f53e17059cc3b8fb89ca1",
     "source": "local"
   },
   "ncmake-images-server.yml": {
-    "hash": "a138d05202c3d48813410ce439f50f25d87f27b53901f39c0b18a1b5a7276609",
-    "sha": "1da7b618bf1b47d49d4aa3675419677494bd3d76",
+    "hash": "5b9a82c53a8a2b851e352d15dba0c812ffe92e53e533f7126c18bab89bc1a622",
+    "sha": "937092bf249e6d0b01723a704676f7a8f59d1beb",
     "source": "local"
   },
   "reuse.yml": {

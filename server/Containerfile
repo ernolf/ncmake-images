@@ -18,7 +18,9 @@
 # The extensions and the php.ini values are those of the official image
 # (nextcloud/docker), compiled by install-php-extensions, which also removes the
 # build packages again. The build fails when an extension does not load or PHP
-# prints a startup warning.
+# prints a startup warning. On a PHP ahead of PECL, an extension with a directory
+# in php/patches/<minor> is compiled from its patched source, and one that
+# ncmake-php:<minor> lacks is left out; ncmake-images-server.yml passes both.
 #
 # The profiler app (nextcloud/profiler) of the same major is in custom_apps and not
 # enabled, so a plain install test runs without debug mode and a profiling run only
@@ -40,24 +42,35 @@ ARG base
 # digest so that a build runs a reviewed version and Dependabot can update it. It is
 # bind-mounted into the RUN instead of copied, so it never becomes a layer of the
 # image.
-FROM ghcr.io/mlocati/php-extension-installer:2.12.3@sha256:ac4b252c153a9f6de5578ff2c417790aba836bb49855543144606033eceda253 AS installer
+FROM ghcr.io/mlocati/php-extension-installer:2.13.3@sha256:edda5f9d936fba9b495bdc96ecd19cc8fda7c2574f85db4574795644ae57b456 AS installer
+
+# The source directories of the extensions whose PECL release does not build on the
+# PHP of the base image yet, as in php/Containerfile. An extension with a directory
+# here is compiled from it instead of from PECL. The stage is empty;
+# ncmake-images-server.yml replaces it with the build context sources, which it
+# prepares from php/patches/<minor> for the PHP minor of the base image.
+FROM scratch AS sources
 
 FROM $base
-ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick intl ldap memcached pcntl pdo_mysql pdo_pgsql redis sysvsem zip"
+# mbstring is in every base image up to php:8.5 and skipped there; php:8.6 dropped it.
+ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick intl ldap mbstring memcached pcntl pdo_mysql pdo_pgsql redis sysvsem zip"
 # Only for test runs: pcov collects the coverage of a PHPUnit run.
 ARG test_extensions="pcov"
 # The formats the preview providers of the server hand to Imagick. Their delegates
 # come with the ImageMagick packages imagick pulls in, whose names change with the
-# Debian release of the base, so the build checks the formats, not the packages.
+# Debian release of the base, so the build checks the formats, not the packages. An
+# image built without imagick, because it does not build on that PHP yet, has
+# nothing to check.
 ARG image_formats="SVG PDF HEIC AVIF WEBP"
 # The single quotes keep $argv and $f for PHP.
 # hadolint ignore=SC2016
 RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
-    for e in $extensions $test_extensions; do php -m | grep -qix "$e" || set -- "$@" "$e"; done \
+    --mount=type=bind,from=sources,target=/usr/src/ncmake \
+    for e in $extensions $test_extensions; do php -m | grep -qix "$e" && continue; if [ -d "/usr/src/ncmake/$e" ]; then set -- "$@" "/usr/src/ncmake/$e"; else set -- "$@" "$e"; fi; done \
  && { [ -z "$*" ] || install-php-extensions "$@"; } \
  && for e in $extensions $test_extensions; do php -m | grep -qix "$e" || { echo "$e does not load" >&2; exit 1; }; done \
  && ! php -m 2>&1 | grep -i "PHP Startup" \
- && php -r 'foreach (array_slice($argv, 1) as $f) { if (!in_array($f, Imagick::queryFormats(), true)) { fwrite(STDERR, "Imagick lacks $f\n"); exit(1); } }' $image_formats \
+ && { ! php -m | grep -qix imagick || php -r 'foreach (array_slice($argv, 1) as $f) { if (!in_array($f, Imagick::queryFormats(), true)) { fwrite(STDERR, "Imagick lacks $f\n"); exit(1); } }' $image_formats; } \
  && { echo "opcache.enable=1"; \
       echo "opcache.interned_strings_buffer=32"; \
       echo "opcache.max_accelerated_files=10000"; \
