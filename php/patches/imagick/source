@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 3.8.1, uses XtOffsetOf(), which PHP 8.6 removed.
+# master builds.
+https://codeload.github.com/Imagick/imagick/tar.gz/55ed2e9fda264395636a2e27e51f31673f5566ab 81a24f34334cb620ea16ed563afdc3b61b60ab321f2d817dd0412a8f20ddedf6

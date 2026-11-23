@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 3.2.16, calls zval_dtor(), which PHP 8.6 removed, and
+# takes a zend_string * where it expects a char *. master builds.
+https://codeload.github.com/igbinary/igbinary/tar.gz/2b1f5d62e3037b07c2a46499ac32091cdb41fb40 1664c973d836ae7f0dfa92dbbc04504d506f8caf7c14db27e245646aaaceeab8
