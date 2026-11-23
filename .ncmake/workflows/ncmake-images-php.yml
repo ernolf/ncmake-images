@@ -19,19 +19,20 @@
 # changes: it keeps the patches it was built with. No minor is configured here.
 #
 # A minor is built again only when its inputs change: the digest of its base image,
-# the digest of composer:2, php/Containerfile or the files of php/patches. Their
-# fingerprint is the label ncmake.inputs of the published image, so a day without a
-# change costs a few registry requests. workflow_dispatch with rebuild builds every
-# minor.
+# the digest of composer:2, php/Containerfile or the files of php/patches/<minor>.
+# Their fingerprint is the label ncmake.inputs of the published image, so a day
+# without a change costs a few registry requests. workflow_dispatch with rebuild
+# builds every minor.
 #
 # When the build fails, the extensions of the Containerfile are installed one by
 # one on the base image, each from its PECL release first and, when that fails,
-# from the source that php/patches/<extension> names, with the patches of that
-# directory. The image is built again, those extensions from their patched source,
-# which the label ncmake.patched names, and without those that do not build or do
-# not load on that PHP either way, which the label ncmake.missing names. A
-# directory of php/patches whose extension builds from its PECL release again is
-# no longer needed. One open issue assigned to the repository owner collects the
+# from the source that php/patches/<minor>/<extension> names, with the patches of
+# that directory. A patch is written against one PHP minor and serves only that
+# one; another minor needs other patches or none. The image is built again, those
+# extensions from their patched source, which the label ncmake.patched names, and
+# without those that do not build or do not load on that PHP either way, which the
+# label ncmake.missing names. A directory of php/patches/<minor> whose extension
+# builds from its PECL release on that minor again is no longer needed. One open issue assigned to the repository owner collects the
 # missing extensions, the directories no longer needed and every minor that could
 # not be published at all. Only the last fails the run.
 
@@ -97,7 +98,6 @@ jobs:
           ceiling=$(awk -v id="$ceiling" 'BEGIN { id -= 100; printf "%d.%d", id / 10000, id % 10000 / 100 }')
           echo "PHP $floor to $ceiling, and every minor above it that PHP has built"
           file=$(cat php/Containerfile)
-          patches=$(if [ -d php/patches ]; then find php/patches -type f | LC_ALL=C sort | xargs sha256sum; fi)
           printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
           composer=docker.io/library/composer:2
           cdigest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$composer")
@@ -127,6 +127,7 @@ jobs:
                 newest=$m
               fi
               php=$(skopeo inspect --config "docker://docker.io/library/php@$digest" | jq -r '.config.Env[] | select(startswith("PHP_VERSION=")) | ltrimstr("PHP_VERSION=")')
+              patches=$(if [ -d "php/patches/$m" ]; then find "php/patches/$m" -type f | LC_ALL=C sort | xargs sha256sum; fi)
               sum=$(printf '%s\n' "$file" "$digest" "$cdigest" "$patches" | sha256sum | cut -d ' ' -f 1)
               published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag" 2>/dev/null || :)
               if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
@@ -197,14 +198,16 @@ jobs:
       # default of ARG extensions in php/Containerfile, the installer comes from the
       # image of its installer stage. The PECL release comes first, so the run
       # notices when it builds again; only when it fails, the patched source of
-      # php/patches/<extension> follows. That directory holds a file source with the
-      # URL of a source tarball and its sha256, and the patches, *.patch, applied in
-      # the order of their names with patch -p1 in the directory of the source.
+      # php/patches/<minor>/<extension> follows, of this minor only. That directory
+      # holds a file source with the URL of a source tarball and its sha256, and the
+      # patches, *.patch, applied in the order of their names with patch -p1 in the
+      # directory of the source.
       - name: Find the extensions that do not build or load on PHP ${{ matrix.php }}
         id: probe
         if: steps.full.outcome == 'failure'
         env:
           BASE: ${{ matrix.base }}
+          MINOR: ${{ matrix.minor }}
           PHP: ${{ matrix.php }}
         run: |
           set -u
@@ -221,7 +224,7 @@ jobs:
           # source directory, a GitHub tarball inside it.
           src="$RUNNER_TEMP/sources"
           mkdir -p "$src"
-          for dir in php/patches/*/; do
+          for dir in "php/patches/$MINOR"/*/; do
             [ -f "${dir}source" ] || continue
             e=$(basename "$dir")
             line=$(grep -v '^#' "${dir}source" | head -1)
@@ -290,7 +293,8 @@ jobs:
       # The image keeps the fingerprint of the full Containerfile, so the next attempt
       # with every extension waits for a new base image, mostly the next pre-release
       # or patch release, rather than coming every day. ncmake.patched names the
-      # extensions built from php/patches, ncmake.missing those the image lacks.
+      # extensions built from php/patches/<minor>, ncmake.missing those the image
+      # lacks.
       - name: Build from the patched sources and without the rest
         if: steps.probe.outcome == 'success'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -315,8 +319,9 @@ jobs:
 
       # One open issue collects what needs a look, as gh-stats-measure.yml does for
       # the app versions without a result: a minor that could not be published, the
-      # extensions an image lacks, and the directories of php/patches no longer
-      # needed because the PECL release of their extension builds and loads again,
+      # extensions an image lacks, and the directories of php/patches/<minor> no
+      # longer needed because the PECL release of their extension builds and loads
+      # on that minor again,
       # every directory when the build with every extension succeeded, otherwise
       # those the probe names. What the issue already names is not reported again,
       # so a run reports only what is new. Only the minor that could not be
@@ -332,13 +337,14 @@ jobs:
           OBSOLETE: ${{ steps.probe.outputs.obsolete }}
           PATCHED: ${{ steps.probe.outputs.patched }}
           TAG: ${{ matrix.tag }}
+          MINOR: ${{ matrix.minor }}
           PHP: ${{ matrix.php }}
           ISSUE_TITLE: PHP images to look at
           ISSUE_LABEL: php
         run: |
           set -u
           if [ -n "$PATCHED" ]; then
-            echo "::notice::PHP $PHP: these extensions were built from php/patches: $PATCHED"
+            echo "::notice::PHP $PHP: these extensions were built from php/patches/$MINOR: $PATCHED"
           fi
           failed=
           missing=$MISSING
@@ -347,7 +353,7 @@ jobs:
             failed=1
             missing=
           elif [ "$FULL" = success ]; then
-            obsolete=$(if [ -d php/patches ]; then find php/patches -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | tr '\n' ' '; fi)
+            obsolete=$(if [ -d "php/patches/$MINOR" ]; then find "php/patches/$MINOR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | tr '\n' ' '; fi)
           else
             obsolete=$OBSOLETE
           fi
@@ -373,9 +379,9 @@ jobs:
             lines="$lines- $key: it does not build or load on PHP $PHP"$'\n'
           done
           for e in $obsolete; do
-            key="\`php/patches/$e/\` is no longer needed"
+            key="\`php/patches/$MINOR/$e/\` is no longer needed"
             case "$known" in *"$key"*) continue ;; esac
-            echo "::notice::PHP $PHP: the PECL release of $e builds and loads on it, so php/patches/$e is no longer needed"
+            echo "::notice::PHP $PHP: the PECL release of $e builds and loads on it, so php/patches/$MINOR/$e is no longer needed"
             lines="$lines- $key: the PECL release of \`$e\` builds and loads on PHP $PHP"$'\n'
           done
           [ -n "$lines" ] || exit 0

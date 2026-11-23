@@ -1,4 +1,4 @@
 {
     "name": "ncmake-images PHP",
-    "description": "Publish ghcr.io/ernolf/ncmake-php:<minor> for amd64 and arm64, for every PHP minor from the floor ncmake enforces to the ceiling of Nextcloud master, and <minor>-next for every minor above it, from its release or newest alpha, beta or RC, with the extensions ahead of PECL built from php/patches"
+    "description": "Publish ghcr.io/ernolf/ncmake-php:<minor> for amd64 and arm64, for every PHP minor from the floor ncmake enforces to the ceiling of Nextcloud master, and <minor>-next for every minor above it, from its release or newest alpha, beta or RC, with the extensions ahead of PECL built from the patches of php/patches/<minor>"
 }
