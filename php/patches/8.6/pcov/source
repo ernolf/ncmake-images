@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 1.0.12, uses INI_BOOL(), INI_INT() and INI_STR(), which
+# PHP 8.6 removed; php86.patch defines them through their replacements. No upstream
+# fix is merged: krakjoe/pcov#134 targets develop, which ships no package.xml, and
+# does not apply to 1.0.12. Only the server image carries pcov, ncmake-php does not.
+https://pecl.php.net/get/pcov-1.0.12.tgz 23255c8c9335a9636ccb743f5302436a97a582a0bbde9869485be911bbc15da8
