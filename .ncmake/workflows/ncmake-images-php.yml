@@ -1,30 +1,52 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# Publishes the PHP build image of ncmake, ghcr.io/ernolf/ncmake-php:<minor>, for
-# amd64 and arm64, built from php/Containerfile.
-# https://github.com/ernolf/ncmake-images
+# Publishes the PHP build image of ncmake for amd64 and arm64, built from
+# php/Containerfile. https://github.com/ernolf/ncmake-images
 #
-# The minors run from the PHP floor of the newest end-of-life Nextcloud major to the
-# PHP ceiling of Nextcloud master. The floor is php_eol_floor of the core Makefile of
+# The minors run from the PHP floor of the newest end-of-life Nextcloud major to
+# every minor PHP has built. The floor is php_eol_floor of the core Makefile of
 # ncmake main, read through the bootstrap stub of this repository, so the floor that
-# ncmake enforces and the images that exist cannot disagree. The ceiling comes from
-# lib/versioncheck.php of Nextcloud master.
+# ncmake enforces and the images that exist cannot disagree. A minor up to the PHP
+# ceiling in lib/versioncheck.php of Nextcloud master is published as
+# ghcr.io/ernolf/ncmake-php:<minor>, one above it as <minor>-next, and
+# ncmake-php:next names the newest of those. Each is built from its release or,
+# before it, from the newest alpha, beta or RC, which the Docker Official Images
+# keep under php:<minor>-rc. The label ncmake.php names the exact PHP, for example
+# 8.6.0RC3.
+#
+# Every minor takes the same path, so the day master allows a minor only its tag
+# changes: it keeps the patches it was built with. No minor is configured here.
 #
 # A minor is built again only when its inputs change: the digest of its base image,
-# the digest of composer:2 or php/Containerfile. Their fingerprint is the label
-# ncmake.inputs of the published image, so a day without a change costs a few
-# registry requests. workflow_dispatch with rebuild builds every minor.
+# the digest of composer:2, php/Containerfile or the files of php/patches. Their
+# fingerprint is the label ncmake.inputs of the published image, so a day without a
+# change costs a few registry requests. workflow_dispatch with rebuild builds every
+# minor.
+#
+# When the build fails, the extensions of the Containerfile are installed one by
+# one on the base image, each from its PECL release first and, when that fails,
+# from the source that php/patches/<extension> names, with the patches of that
+# directory. The image is built again, those extensions from their patched source,
+# which the label ncmake.patched names, and without those that do not build or do
+# not load on that PHP either way, which the label ncmake.missing names. A
+# directory of php/patches whose extension builds from its PECL release again is
+# no longer needed. One open issue assigned to the repository owner collects the
+# missing extensions, the directories no longer needed and every minor that could
+# not be published at all. Only the last fails the run.
 
 name: PHP images
 
 on:
   schedule:
-    - cron: '17 4 * * *'
+    # An hour before the data update of ncmake, which takes no PHP ceiling of
+    # Nextcloud master into its data before the image of that minor is published.
+    - cron: '17 3 * * *'
   push:
     branches: [main]
     paths:
       - php/Containerfile
+      - php/patches/**
       - .github/workflows/ncmake-images-php.yml
   workflow_dispatch:
     inputs:
@@ -71,44 +93,65 @@ jobs:
           ceiling=$(curl -fsSL https://raw.githubusercontent.com/nextcloud/server/master/lib/versioncheck.php | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1)
           [ -n "$floor" ] || { echo "::error::No PHP floor for the newest end-of-life Nextcloud major"; exit 1; }
           [ -n "$ceiling" ] || { echo "::error::No PHP ceiling in lib/versioncheck.php of Nextcloud master"; exit 1; }
-          # versioncheck.php refuses PHP_VERSION_ID >= ceiling, so the highest minor is the one below it.
+          # versioncheck.php refuses PHP_VERSION_ID >= ceiling, so the highest minor it allows is the one below it.
           ceiling=$(awk -v id="$ceiling" 'BEGIN { id -= 100; printf "%d.%d", id / 10000, id % 10000 / 100 }')
-          echo "PHP $floor to $ceiling"
+          echo "PHP $floor to $ceiling, and every minor above it that PHP has built"
           file=$(cat php/Containerfile)
+          patches=$(if [ -d php/patches ]; then find php/patches -type f | LC_ALL=C sort | xargs sha256sum; fi)
           printf '%s\n' "$GH_TOKEN" | skopeo login ghcr.io -u "$GH_ACTOR" --password-stdin >/dev/null
           composer=docker.io/library/composer:2
           cdigest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$composer")
           matrix='[]'
-          for major in $(seq "${floor%%.*}" "${ceiling%%.*}"); do
+          newest=
+          # Up to the first minors of the major after the ceiling.
+          for major in $(seq "${floor%%.*}" "$((${ceiling%%.*} + 1))"); do
             for minor in $(seq 0 9); do
               m=$major.$minor
               [ "$(printf '%s\n' "$floor" "$m" | sort -V | head -1)" = "$floor" ] || continue
-              [ "$(printf '%s\n' "$m" "$ceiling" | sort -V | tail -1)" = "$ceiling" ] || continue
-              base=docker.io/library/php:${m}-cli-alpine
-              if ! digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
-                echo "::notice::$base does not exist, PHP $m is skipped"
+              base=
+              for tag in "${m}-cli-alpine" "${m}-rc-cli-alpine"; do
+                if digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://docker.io/library/php:$tag" 2>/dev/null); then
+                  base=docker.io/library/php:$tag
+                  break
+                fi
+              done
+              # Below the ceiling a minor without an image may be one PHP never had.
+              if [ -z "$base" ]; then
+                [ "$m" != "$ceiling" ] || echo "::warning::Nextcloud master allows PHP $m, but php:$m has neither a release nor a pre-release image"
                 continue
               fi
-              sum=$(printf '%s\n' "$file" "$digest" "$cdigest" | sha256sum | cut -d ' ' -f 1)
-              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$m" 2>/dev/null || :)
+              if [ "$(printf '%s\n' "$m" "$ceiling" | sort -V | tail -1)" = "$ceiling" ]; then
+                tag=$m
+              else
+                tag=${m}-next
+                newest=$m
+              fi
+              php=$(skopeo inspect --config "docker://docker.io/library/php@$digest" | jq -r '.config.Env[] | select(startswith("PHP_VERSION=")) | ltrimstr("PHP_VERSION=")')
+              sum=$(printf '%s\n' "$file" "$digest" "$cdigest" "$patches" | sha256sum | cut -d ' ' -f 1)
+              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag" 2>/dev/null || :)
               if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
-                echo "PHP $m: unchanged"
+                echo "ncmake-php:$tag ($php from $base): unchanged"
                 continue
               fi
-              echo "PHP $m: to build"
-              matrix=$(printf '%s' "$matrix" | jq -c --arg minor "$m" --arg base "$base@$digest" --arg composer "$composer@$cdigest" --arg sum "$sum" '. + [{minor: $minor, base: $base, composer: $composer, sum: $sum}]')
+              echo "ncmake-php:$tag ($php from $base): to build"
+              matrix=$(printf '%s' "$matrix" | jq -c --arg minor "$m" --arg tag "$tag" --arg php "$php" --arg base "$base@$digest" --arg composer "$composer@$cdigest" --arg sum "$sum" '. + [{minor: $minor, tag: $tag, php: $php, base: $base, composer: $composer, sum: $sum}]')
             done
           done
+          # Only the newest minor above the ceiling carries the next tag as well.
+          matrix=$(printf '%s' "$matrix" | jq -c --arg image "$IMAGE" --arg newest "$newest" 'map(. + {tags: ("\($image):\(.tag)" + (if .minor == $newest then ",\($image):next" else "" end))})')
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   build:
-    name: Build and push PHP ${{ matrix.minor }}
+    name: Build and push ncmake-php:${{ matrix.tag }} (${{ matrix.php }})
     needs: plan
     if: needs.plan.outputs.matrix != '[]'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+      # Reports what an image lacks, the patches it no longer needs and a minor
+      # that could not be published.
+      issues: write
     strategy:
       fail-fast: false
       matrix:
@@ -128,17 +171,223 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      - name: Build with every extension
+        id: full
+        continue-on-error: true
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: php
           file: php/Containerfile
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ${{ env.IMAGE }}:${{ matrix.minor }}
+          tags: ${{ matrix.tags }}
           build-args: |
             base=${{ matrix.base }}
             composer=${{ matrix.composer }}
           labels: |
             ncmake.inputs=${{ matrix.sum }}
+            ncmake.php=${{ matrix.php }}
             org.opencontainers.image.source=https://github.com/ernolf/ncmake-images
+
+      # A new PHP is mostly ahead of the PECL extensions too. Each extension is
+      # installed on its own, as the Containerfile skips one the base image already
+      # loads, which names the ones that do not build. One that builds can still
+      # miss a library it links against, so each must also load. The list is the
+      # default of ARG extensions in php/Containerfile, the installer comes from the
+      # image of its installer stage. The PECL release comes first, so the run
+      # notices when it builds again; only when it fails, the patched source of
+      # php/patches/<extension> follows. That directory holds a file source with the
+      # URL of a source tarball and its sha256, and the patches, *.patch, applied in
+      # the order of their names with patch -p1 in the directory of the source.
+      - name: Find the extensions that do not build or load on PHP ${{ matrix.php }}
+        id: probe
+        if: steps.full.outcome == 'failure'
+        env:
+          BASE: ${{ matrix.base }}
+          PHP: ${{ matrix.php }}
+        run: |
+          set -u
+          exts=$(sed -n 's/^ARG extensions="\(.*\)"$/\1/p' php/Containerfile)
+          installer=$(sed -n 's/^FROM \([^ ]*\) AS installer$/\1/p' php/Containerfile)
+          [ -n "$exts" ] && [ -n "$installer" ] || { echo "::error::No ARG extensions with a default or no installer stage in php/Containerfile"; exit 1; }
+          # The installer image has no shell, so the script is copied out of a
+          # container that is created but never started.
+          ipe="$RUNNER_TEMP/install-php-extensions"
+          cid=$(docker create "$installer" none) && docker cp "$cid:/usr/bin/install-php-extensions" "$ipe" && docker rm "$cid" >/dev/null \
+            || { echo "::error::PHP $PHP: install-php-extensions could not be taken from $installer"; exit 1; }
+          # install-php-extensions takes a directory with the package.xml and the
+          # source of an extension. A PECL tarball keeps package.xml beside its
+          # source directory, a GitHub tarball inside it.
+          src="$RUNNER_TEMP/sources"
+          mkdir -p "$src"
+          for dir in php/patches/*/; do
+            [ -f "${dir}source" ] || continue
+            e=$(basename "$dir")
+            line=$(grep -v '^#' "${dir}source" | head -1)
+            url=${line%% *}
+            sha=${line##* }
+            x="$RUNNER_TEMP/extract/$e"
+            mkdir -p "$x"
+            curl -fsSL --retry 3 -o "$x.tar.gz" "$url" && printf '%s  %s\n' "$sha" "$x.tar.gz" | sha256sum -c --quiet \
+              || { echo "::error::PHP $PHP: ${dir}source: $url could not be fetched or does not match its sha256"; exit 1; }
+            tar -xzf "$x.tar.gz" -C "$x"
+            top=$(find "$x" -mindepth 1 -maxdepth 1 -type d)
+            if [ -z "$top" ] || [ "$(printf '%s\n' "$top" | wc -l)" -ne 1 ]; then
+              echo "::error::PHP $PHP: $url holds no single source directory"
+              exit 1
+            fi
+            [ ! -f "$x/package.xml" ] || mv "$x/package.xml" "$top/"
+            for p in "$dir"*.patch; do
+              [ -f "$p" ] || continue
+              patch -d "$top" -p1 --forward --quiet < "$p" || { echo "::error::PHP $PHP: $p does not apply to $url"; exit 1; }
+            done
+            # The package.xml of a PECL release records the md5sum of every file,
+            # and pecl refuses a file that a patch changed. The sha256 of the
+            # tarball and the reviewed patches already pin the source.
+            [ ! -f "$top/package.xml" ] || sed -i 's/ md5sum="[0-9a-f]*"//' "$top/package.xml"
+            mv "$top" "$src/$e"
+          done
+          # shellcheck disable=SC2016,SC2086 # the script runs in the container, and exts is a list
+          result=$(docker run --rm -v "$ipe:/usr/local/bin/install-php-extensions:ro" -v "$src:/usr/src/ncmake:ro" "$BASE" sh -c '
+            for e; do
+              php -m | grep -qix "$e" && continue
+              if install-php-extensions "$e" >/dev/null 2>&1 && php -m 2>/dev/null | grep -qix "$e"; then
+                [ ! -d "/usr/src/ncmake/$e" ] || echo "obsolete $e"
+              elif [ -d "/usr/src/ncmake/$e" ] && install-php-extensions "/usr/src/ncmake/$e" >/dev/null 2>&1 && php -m 2>/dev/null | grep -qix "$e"; then
+                echo "patched $e"
+              else
+                echo "missing $e"
+              fi
+            done' probe $exts) \
+            || { echo "::error::PHP $PHP: the extension probe could not run on $BASE"; exit 1; }
+          missing=$(printf '%s\n' "$result" | sed -n 's/^missing //p' | tr '\n' ' ')
+          patched=$(printf '%s\n' "$result" | sed -n 's/^patched //p' | tr '\n' ' ')
+          obsolete=$(printf '%s\n' "$result" | sed -n 's/^obsolete //p' | tr '\n' ' ')
+          if [ -z "$missing$patched" ]; then
+            echo "::error::PHP $PHP: every extension builds and loads from its PECL release on its own, so the build failed in another step; its log above names it"
+            exit 1
+          fi
+          # The build context sources holds the patched source of exactly the
+          # extensions that need it; the Containerfile compiles each of them from it.
+          use="$RUNNER_TEMP/patched"
+          mkdir -p "$use"
+          for e in $patched; do
+            mv "$src/$e" "$use/"
+          done
+          keep=
+          for e in $exts; do
+            case " $missing " in *" $e "*) ;; *) keep="$keep $e" ;; esac
+          done
+          {
+            echo "missing=${missing% }"
+            echo "patched=${patched% }"
+            echo "obsolete=${obsolete% }"
+            echo "keep=${keep# }"
+            echo "context=$use"
+          } >> "$GITHUB_OUTPUT"
+
+      # The image keeps the fingerprint of the full Containerfile, so the next attempt
+      # with every extension waits for a new base image, mostly the next pre-release
+      # or patch release, rather than coming every day. ncmake.patched names the
+      # extensions built from php/patches, ncmake.missing those the image lacks.
+      - name: Build from the patched sources and without the rest
+        if: steps.probe.outcome == 'success'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: php
+          file: php/Containerfile
+          build-contexts: sources=${{ steps.probe.outputs.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ matrix.tags }}
+          build-args: |
+            base=${{ matrix.base }}
+            composer=${{ matrix.composer }}
+            extensions=${{ steps.probe.outputs.keep }}
+          labels: |
+            ncmake.inputs=${{ matrix.sum }}
+            ncmake.php=${{ matrix.php }}
+            ncmake.patched=${{ steps.probe.outputs.patched }}
+            ncmake.missing=${{ steps.probe.outputs.missing }}
+            org.opencontainers.image.source=https://github.com/ernolf/ncmake-images
+
+      # One open issue collects what needs a look, as gh-stats-measure.yml does for
+      # the app versions without a result: a minor that could not be published, the
+      # extensions an image lacks, and the directories of php/patches no longer
+      # needed because the PECL release of their extension builds and loads again,
+      # every directory when the build with every extension succeeded, otherwise
+      # those the probe names. What the issue already names is not reported again,
+      # so a run reports only what is new. Only the minor that could not be
+      # published fails the run, through the step that failed.
+      - name: Report what ncmake-php:${{ matrix.tag }} lacks or no longer needs
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATUS: ${{ job.status }}
+          FULL: ${{ steps.full.outcome }}
+          MISSING: ${{ steps.probe.outputs.missing }}
+          OBSOLETE: ${{ steps.probe.outputs.obsolete }}
+          PATCHED: ${{ steps.probe.outputs.patched }}
+          TAG: ${{ matrix.tag }}
+          PHP: ${{ matrix.php }}
+          ISSUE_TITLE: PHP images to look at
+          ISSUE_LABEL: php
+        run: |
+          set -u
+          if [ -n "$PATCHED" ]; then
+            echo "::notice::PHP $PHP: these extensions were built from php/patches: $PATCHED"
+          fi
+          failed=
+          missing=$MISSING
+          obsolete=
+          if [ "$STATUS" != success ]; then
+            failed=1
+            missing=
+          elif [ "$FULL" = success ]; then
+            obsolete=$(if [ -d php/patches ]; then find php/patches -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | LC_ALL=C sort | tr '\n' ' '; fi)
+          else
+            obsolete=$OBSOLETE
+          fi
+          [ -n "$failed${missing// /}${obsolete// /}" ] || exit 0
+          number=$(gh issue list --state open --label "$ISSUE_LABEL" --json number,title \
+            | jq -r --arg t "$ISSUE_TITLE" 'map(select(.title == $t))[0].number // empty')
+          known=
+          if [ -n "$number" ]; then
+            known=$(gh issue view "$number" --json body,comments -q '[.body, .comments[].body] | join("\n")')
+          fi
+          lines=
+          if [ -n "$failed" ]; then
+            key="\`ncmake-php:$TAG\` could not be published"
+            case "$known" in
+              *"$key"*) ;;
+              *) lines="$lines- $key: the build on PHP $PHP failed, the run $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID names the step"$'\n' ;;
+            esac
+          fi
+          for e in $missing; do
+            key="\`$e\` is missing from ncmake-php:$TAG"
+            case "$known" in *"$key"*) continue ;; esac
+            echo "::notice::PHP $PHP: $e does not build or load on it, and the image was published without it"
+            lines="$lines- $key: it does not build or load on PHP $PHP"$'\n'
+          done
+          for e in $obsolete; do
+            key="\`php/patches/$e/\` is no longer needed"
+            case "$known" in *"$key"*) continue ;; esac
+            echo "::notice::PHP $PHP: the PECL release of $e builds and loads on it, so php/patches/$e is no longer needed"
+            lines="$lines- $key: the PECL release of \`$e\` builds and loads on PHP $PHP"$'\n'
+          done
+          [ -n "$lines" ] || exit 0
+          body="$RUNNER_TEMP/issue.md"
+          {
+            echo "@$GITHUB_REPOSITORY_OWNER the run $GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID found:"
+            echo
+            printf '%s' "$lines"
+          } > "$body"
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+          else
+            gh issue create --title "$ISSUE_TITLE" --label "$ISSUE_LABEL" \
+              --assignee "$GITHUB_REPOSITORY_OWNER" --body-file "$body"
+          fi

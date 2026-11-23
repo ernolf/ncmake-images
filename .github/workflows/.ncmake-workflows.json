@@ -19,14 +19,9 @@
     "sha": "ed7e767a838ca0dc6bc175ee75b0ccfbc31f62ae",
     "source": "local"
   },
-  "ncmake-images-php-next.yml": {
-    "hash": "5c21fc2c9b0b80df787a93f751e6666d71ca5a4826a0e677ec2513069db4c73e",
-    "sha": "75292ebb46a228b6a83b8cf050ed1bcb2bc17a1b",
-    "source": "local"
-  },
   "ncmake-images-php.yml": {
-    "hash": "de289e296a0aa836cd5d8375db2c1c30378d3bab978b6a682c1c8d2a8bdb70e5",
-    "sha": "8aca19907bf38c64a4802c52babc10678d65b63a",
+    "hash": "9e17a4cedbc68653197783ded3b58755868d8e5f76a2acf9d36cd41e1d1c0750",
+    "sha": "2d79fece730086a5a6fff350b1aa4cc224644a19",
     "source": "local"
   },
   "ncmake-images-server.yml": {
