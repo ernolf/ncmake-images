@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
+# SPDX-License-Identifier: MIT
+#
+# The newest PECL release, 2.3.0, calls zval_dtor(), the alias of
+# zval_ptr_dtor_nogc() that PHP 8.6 removed. master no longer does.
+https://codeload.github.com/php/pecl-file_formats-yaml/tar.gz/a77fb491dd4614290db8e56e87bd3b03b3e8fd01 d7fa9fa9cd2d77c65280fcfcb03bcabbcc867ec967937f47fbad419bec46b0b0
