@@ -16,7 +16,8 @@
 # find exactly that. It is installed on SQLite while the image is built.
 #
 # The extensions and the php.ini values are those of the official image
-# (nextcloud/docker), compiled by install-php-extensions, which also removes the
+# (nextcloud/docker), with inotify, soap and yaml, which apps declare beyond it and
+# ncmake-php carries too. install-php-extensions compiles them and removes the
 # build packages again. The build fails when an extension does not load or PHP
 # prints a startup warning. On a PHP ahead of PECL, an extension with a directory
 # in php/patches/<minor> is compiled from its patched source, and one that
@@ -53,7 +54,7 @@ FROM scratch AS sources
 
 FROM $base
 # mbstring is in every base image up to php:8.5 and skipped there; php:8.6 dropped it.
-ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick intl ldap mbstring memcached pcntl pdo_mysql pdo_pgsql redis sysvsem zip"
+ARG extensions="apcu bcmath exif ftp gd gmp igbinary imagick inotify intl ldap mbstring memcached pcntl pdo_mysql pdo_pgsql redis soap sysvsem yaml zip"
 # Only for test runs: pcov collects the coverage of a PHPUnit run.
 ARG test_extensions="pcov"
 # The formats the preview providers of the server hand to Imagick. Their delegates
@@ -91,6 +92,13 @@ RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,targ
  && a2enmod -q rewrite headers env dir mime \
  && echo "ServerName localhost" > /etc/apache2/conf-available/ncmake.conf \
  && a2enconf -q ncmake
+
+# ffmpeg, which apps call for previews and media of their own, from the Debian
+# release of the base image.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/* \
+ && ffmpeg -hide_banner -version > /dev/null
 
 # The key that signs the server tarballs, https://nextcloud.com/nextcloud.asc. The
 # key file is fetched, the fingerprint is what a signature has to name.
