@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 [ernolf] Raphael Gradenwitz <raphael.gradenwitz@googlemail.com>
 # SPDX-License-Identifier: MIT
 #
-# The install-test server of ncmake, ghcr.io/ernolf/ncmake-server:<major>.
+# The install-test server of ncmake, ghcr.io/ernolf/ncmake-server:<major>, and
+# :<major>-php<minor> for every PHP minor the major allows.
 # https://github.com/ernolf/ncmake-images
 #
 #   podman build -f server/Containerfile \
