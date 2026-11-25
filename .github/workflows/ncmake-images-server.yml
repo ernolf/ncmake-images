@@ -29,6 +29,9 @@
 # of ncmake-php:<minor>. Their fingerprint is the label ncmake.inputs of the published
 # image, so a day without a change costs a few requests. The tarball of master is a
 # new one every day. workflow_dispatch with rebuild builds every image.
+#
+# A push to php/patches starts the PHP workflow as well, which publishes the label
+# ncmake.missing, so the plan waits until no run of it is queued or running.
 
 name: Server images
 
@@ -66,6 +69,7 @@ jobs:
     if: github.repository == 'ernolf/ncmake-images'
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: read
     outputs:
@@ -74,6 +78,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The label ncmake.missing the plan reads is the one of the run that last
+      # finished; a run of the PHP workflow still building would publish another.
+      - name: Wait for the PHP images
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          while :; do
+            if busy=$(gh run list -R "$GITHUB_REPOSITORY" --workflow ncmake-images-php.yml --limit 20 --json status --jq '[.[] | select(.status != "completed")] | length'); then
+              [ "$busy" -gt 0 ] || break
+              echo "$busy run(s) of the PHP workflow not completed, checking again in 5 minutes"
+            else
+              echo "The runs of the PHP workflow could not be listed, trying again in 5 minutes"
+            fi
+            sleep 300
+          done
 
       - name: Compare the inputs of each server with the published image
         id: plan
