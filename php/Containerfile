@@ -44,7 +44,7 @@ FROM ghcr.io/mlocati/php-extension-installer:2.13.3@sha256:edda5f9d936fba9b495bd
 FROM scratch AS sources
 
 FROM $base
-ARG extensions="apcu bcmath bz2 calendar ctype curl decimal dom exif ffi fileinfo ftp gd gettext gmp igbinary imagick inotify intl ldap libxml mbstring memcached mysqli openssl pcntl pdo pdo_mysql pdo_pgsql pgsql posix redis session shmop simplexml smbclient sockets sysvmsg sysvsem sysvshm xml xmlreader xmlwriter xsl zip zlib"
+ARG extensions="apcu bcmath bz2 calendar ctype curl decimal dom exif ffi fileinfo ftp gd gettext gmp igbinary imagick inotify intl ldap libxml mbstring memcached mysqli openssl pcntl pdo pdo_mysql pdo_pgsql pgsql posix redis session shmop simplexml smbclient soap sockets sysvmsg sysvsem sysvshm xml xmlreader xmlwriter xsl yaml zip zlib"
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 RUN --mount=type=bind,from=installer,source=/usr/bin/install-php-extensions,target=/usr/local/bin/install-php-extensions \
     --mount=type=bind,from=sources,target=/usr/src/ncmake \
