@@ -12,7 +12,10 @@
 # server/daily/latest-master.tar.bz2. A major without a release is skipped.
 #
 # Each server runs on the highest PHP minor it allows, read from lib/versioncheck.php
-# of its branch, and carries the profiler app of the same branch.
+# of its branch, and carries the profiler app of the same branch. Every minor the
+# major allows is published as well, ncmake-server:<major>-php<minor> and
+# master-php<minor>, the highest one included, so that an app whose
+# <php max-version> is below the highest runs on the PHP it declares.
 #
 # On a PHP minor ahead of PECL, an extension of the server with a directory in
 # php/patches/<minor> is compiled from its patched source, prepared by
@@ -110,40 +113,51 @@ jobs:
             fi
             ceiling=$(curl -fsSL --retry 3 "$SERVER_RAW/$branch/lib/versioncheck.php" | sed -n 's/.*PHP_VERSION_ID >= \([0-9]*\).*/\1/p' | head -1)
             [ -n "$ceiling" ] || { echo "::error::No PHP ceiling in lib/versioncheck.php of Nextcloud $branch"; exit 1; }
-            # versioncheck.php refuses PHP_VERSION_ID >= ceiling, so the highest minor
-            # is the one below it. A minor without an image yet falls back to the one
-            # below, down to the .0 of the same PHP major.
-            id=$((ceiling - 100))
-            digest=''
-            while :; do
-              minor=$((id / 10000)).$((id % 10000 / 100))
-              base=docker.io/library/php:${minor}-apache
-              if digest=$(skopeo inspect --retry-times 3 --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
-                break
-              fi
-              echo "::notice::$base does not exist, Nextcloud $tag falls back to the minor below"
-              digest=''
-              [ "$((id % 10000))" -ge 100 ] || break
-              id=$((id - 100))
-            done
-            [ -n "$digest" ] || { echo "::error::No PHP image for Nextcloud $tag"; exit 1; }
+            floor=$(curl -fsSL --retry 3 "$SERVER_RAW/$branch/lib/versioncheck.php" | sed -n 's/.*PHP_VERSION_ID < \([0-9]*\).*/\1/p' | head -1)
+            [ -n "$floor" ] || { echo "::error::No PHP floor in lib/versioncheck.php of Nextcloud $branch"; exit 1; }
             commit=$(git ls-remote "$PROFILER" "refs/heads/$branch" | cut -f 1)
             [ -n "$commit" ] || { echo "::error::No branch $branch in $PROFILER"; exit 1; }
-            # Every minor a server allows is at most the ceiling of master, so its
-            # PHP image is ncmake-php:<minor>, not <minor>-next. A label the image
-            # lacks reads as <no value>.
-            missing=$(skopeo inspect --retry-times 3 --no-tags --format '{{index .Labels "ncmake.missing"}}' "docker://$PHP_IMAGE:$minor" 2>/dev/null) \
-              || { echo "::error::No $PHP_IMAGE:$minor for Nextcloud $tag"; exit 1; }
-            [ "$missing" != '<no value>' ] || missing=
-            patches=$(if [ -d "php/patches/$minor" ]; then find "php/patches/$minor" -type f | LC_ALL=C sort | xargs sha256sum; fi)
-            sum=$(printf '%s\n' "$file" "$digest" "$tarball" "$commit" "$patches" "$missing" | sha256sum | cut -d ' ' -f 1)
-            published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag" 2>/dev/null || :)
-            if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
-              echo "Nextcloud $tag: unchanged"
-              continue
-            fi
-            echo "Nextcloud $tag on PHP $minor: to build"
-            matrix=$(printf '%s' "$matrix" | jq -c --arg tag "$tag" --arg php "$minor" --arg base "$base@$digest" --arg server "$url" --arg profiler "$PROFILER/archive/$commit.tar.gz" --arg missing "$missing" --arg sum "$sum" '. + [{tag: $tag, php: $php, base: $base, server: $server, profiler: $profiler, missing: $missing, sum: $sum}]')
+            # versioncheck.php refuses PHP_VERSION_ID >= ceiling and < floor, so the
+            # minors run from the one below the ceiling down to the floor. The highest
+            # minor that has an image is the one the plain tag names; every minor is
+            # <tag>-php<minor> as well, for an app whose <php max-version> is below the
+            # highest. A minor without an image yet is left out.
+            id=$((ceiling - 100))
+            top=
+            while [ "$id" -ge "$floor" ]; do
+              minor=$((id / 10000)).$((id % 10000 / 100))
+              id=$((id - 100))
+              base=docker.io/library/php:${minor}-apache
+              if ! digest=$(skopeo inspect --retry-times 3 --no-tags --format '{{.Digest}}' "docker://$base" 2>/dev/null); then
+                echo "::notice::$base does not exist, Nextcloud $tag is built without PHP $minor"
+                continue
+              fi
+              # Every minor a server allows is at most the ceiling of master, so its
+              # PHP image is ncmake-php:<minor>, not <minor>-next. A label the image
+              # lacks reads as <no value>.
+              if ! missing=$(skopeo inspect --retry-times 3 --no-tags --format '{{index .Labels "ncmake.missing"}}' "docker://$PHP_IMAGE:$minor" 2>/dev/null); then
+                echo "::notice::No $PHP_IMAGE:$minor, Nextcloud $tag is built without PHP $minor"
+                continue
+              fi
+              [ "$missing" != '<no value>' ] || missing=
+              tags="$IMAGE:$tag-php$minor"
+              if [ -z "$top" ]; then
+                top=$minor
+                tags="$IMAGE:$tag,$tags"
+              fi
+              patches=$(if [ -d "php/patches/$minor" ]; then find "php/patches/$minor" -type f | LC_ALL=C sort | xargs sha256sum; fi)
+              sum=$(printf '%s\n' "$file" "$digest" "$tarball" "$commit" "$patches" "$missing" | sha256sum | cut -d ' ' -f 1)
+              # The tag of the minor, which the highest one carries too, holds the
+              # fingerprint of what was built for it.
+              published=$(skopeo inspect --no-tags --format '{{index .Labels "ncmake.inputs"}}' "docker://$IMAGE:$tag-php$minor" 2>/dev/null || :)
+              if [ "$REBUILD" != true ] && [ "$published" = "$sum" ]; then
+                echo "Nextcloud $tag on PHP $minor: unchanged"
+                continue
+              fi
+              echo "Nextcloud $tag on PHP $minor: to build"
+              matrix=$(printf '%s' "$matrix" | jq -c --arg tag "$tag-php$minor" --arg tags "$tags" --arg php "$minor" --arg base "$base@$digest" --arg server "$url" --arg profiler "$PROFILER/archive/$commit.tar.gz" --arg missing "$missing" --arg sum "$sum" '. + [{tag: $tag, tags: $tags, php: $php, base: $base, server: $server, profiler: $profiler, missing: $missing, sum: $sum}]')
+            done
+            [ -n "$top" ] || { echo "::error::No PHP image for Nextcloud $tag"; exit 1; }
           done
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
@@ -226,7 +240,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
-          tags: ${{ env.IMAGE }}:${{ matrix.tag }}
+          tags: ${{ matrix.tags }}
           build-args: |
             base=${{ matrix.base }}
             server=${{ matrix.server }}
